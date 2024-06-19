@@ -11,7 +11,7 @@ def load_csv(file):
     return pd.read_csv(file, header=1, skiprows=[2, 3])
 
 def calculate_outside(df):
-    eau_per_min = 9.8615
+    eau_per_min = 9.54
     specific_heat = 4180
     total_area = 0.88 * 1.54
     
@@ -102,8 +102,8 @@ def generate_daily_animation(filtered_df, sensor_positions):
         st.plotly_chart(fig)
 
 
-# Função principal
-def main():
+# Menus, used to select the window of what the user wishes to do
+def menu_selection():
     st.title("Projet SunRoad")
     menu = st.sidebar.selectbox("Menu", ["Load Archives", "Heatmaps", "Plots", "Correlation"])
 
@@ -116,7 +116,8 @@ def main():
     elif menu == "Correlation":
         visualize_correlation()
 
-# Função para tratar o upload dos arquivos       
+# Manages the loading of the CSV files as well as merging them alltogether into one
+# Also calls for the calculations done for measuring harvested energt
 def handle_file_upload():
     st.header("Load Archives")
     uploaded_files = st.file_uploader("Upload the CSV documents", type="csv", accept_multiple_files=True)
@@ -126,19 +127,19 @@ def handle_file_upload():
         for file in uploaded_files:
             df = load_csv(file)
             print(df.info())
-            #df = convert_columns_to_float(df)
             dataframes.append(df)
 
         if dataframes:
-            # Realizando o merge conforme a lógica especificada
+            # Goes through the list in order to merge them in the order they were added
             merged_df = dataframes[0]
             for df in dataframes[1:]:
                 merged_df = pd.merge(merged_df, df)   
             merged_df = calculate_outside(merged_df)
             st.write(merged_df)
             st.session_state['merged_df'] = merged_df
-            print(merged_df.info()) 
-# Função para visualizar os heatmaps
+            print(merged_df.info()) #debug
+            
+# Heatmao configuration
 def visualize_heatmaps():
     st.header("Heatmaps")
     
@@ -158,31 +159,16 @@ def visualize_heatmaps():
     visualization_mode = st.selectbox("Visualize", ["Interval average", "Animation of a day"])
 
     if visualization_mode == "Interval average":
-        if st.button("Gerar Heatmap"):
-            title = f"{sensor_part} Sensors Temperature Heatmap"
-            interpolate_heatmap(filtered_df, sensor_positions, title)
+        if st.button("Generate Heatmap"):
+            interpolate_heatmap(filtered_df, sensor_positions)
 
     elif visualization_mode == "Animation of a day":
         generate_daily_animation(filtered_df, sensor_positions)
 
-# Função para interpolar e criar o heatmap
-def interpolate_heatmap(filtered_df, sensor_positions, title, std_threshold=3):
-    # Calcular a média e o desvio padrão para cada sensor
-    sensor_means = {pos: filtered_df[pos].mean() for pos in sensor_positions.keys()}
-    sensor_stds = {pos: filtered_df[pos].std() for pos in sensor_positions.keys()}
+# Interpolation of the nine sensors to create a graph like image resembling the temperatures of the whole surface
+def interpolate_heatmap(filtered_df, sensor_positions):
+
     
-    # Criar uma cópia do DataFrame filtrado para evitar alterações indesejadas
-    filtered_df_copy = filtered_df.copy()
-    
-    # Aplicar o filtro para remover outliers
-    for pos in sensor_positions.keys():
-        mean = sensor_means[pos]
-        std = sensor_stds[pos]
-        lower_bound = mean - std_threshold * std
-        upper_bound = mean + std_threshold * std
-        filtered_df_copy[pos] = filtered_df_copy[pos].apply(lambda x: x if lower_bound <= x <= upper_bound else mean)
-    
-    # Restante do código para criar o heatmap permanece o mesmo
     sensor_x = [pos[0] for pos in sensor_positions.values()]
     sensor_y = [pos[1] for pos in sensor_positions.values()]
     min_x, max_x = min(sensor_x), max(sensor_x)
@@ -190,28 +176,23 @@ def interpolate_heatmap(filtered_df, sensor_positions, title, std_threshold=3):
     grid_x, grid_y = np.mgrid[min_x:max_x:200j, min_y:max_y:200j]
 
     points = np.array(list(sensor_positions.values()))
-    values = np.array([filtered_df_copy[pos].mean() for pos in sensor_positions.keys()])
+    values = np.array([filtered_df[pos].mean() for pos in sensor_positions.keys()])
     grid_z = griddata(points, values, (grid_x, grid_y), method='linear')
 
     heatmap = go.Heatmap(z=grid_z, x=np.linspace(min_x, max_x, 200), y=np.linspace(min_y, max_y, 200), colorscale='Viridis')
 
-    layout = go.Layout(title=title, xaxis=dict(title='X position (mm)'), yaxis=dict(title='Y position (mm)'))
+    layout = go.Layout(title='Total average heatmap', xaxis=dict(title='X position (mm)'), yaxis=dict(title='Y position (mm)'))
     fig = go.Figure(data=[heatmap], layout=layout)
     st.plotly_chart(fig)
 
+# Function for generating graphs from the dataset according to the preferences of the user
 def visualize_plots():
     st.header("Graphical Plotting")
     
     merged_df = st.session_state['merged_df']
+    
     columns = merged_df.columns.tolist()
-    
-    # Selecionar colunas para plotagem
     selected_columns = st.multiselect("Select the columns to plot", columns)
-    
-    # Verificar se foram selecionadas colunas suficientes para plotagem
-    if len(selected_columns) < 1:
-        st.warning("Please, select at least one column.")
-        return
     
     start_date = st.date_input("Select start date:", value=datetime.now().date(), key="start_plot_date")
     start_time = st.time_input("Select start time:", value=datetime.strptime("00:00", "%H:%M").time(), key="start_plot_time")
@@ -224,22 +205,16 @@ def visualize_plots():
 
     filtered_df = filter_data_by_datetime(merged_df, start_datetime, end_datetime)
     
-    # Escolher se as colunas utilizarão eixo y principal ou secundário
+    # Temporary solution to separate values that are to different in scale to be plotable at the same time
     y_axes = {}
     for column in selected_columns:
         y_axes[column] = st.radio(f"Axis Y to {column}", ["Principal", "Secundary"])
     
-    # Escolher simbologia para a legenda
-    symbols = {}
-    for column in selected_columns:
-        symbols[column] = st.selectbox(f"Choose the symbol of {column}", ["Line", "Dotted", "Line and dash"])
-    
-    # Escolher se deseja plotar apenas valores positivos
+    # Temporary solution to plot only positive values in order to verify some comportments of the prototype
     plot_positives_only = {}
     for column in selected_columns:
         plot_positives_only[column] = st.checkbox(f"Only positive values for {column}")
     
-    # Botão para gerar os plots
     if st.button("Generate Plots"):
         fig = go.Figure()
         for column in selected_columns:
@@ -251,14 +226,11 @@ def visualize_plots():
                 x_data = filtered_df['TIMESTAMP']
                 y_data = filtered_df[column]
             
-            mode = 'lines+markers' if symbols[column] == "Line and dash" else 'lines' if symbols[column] == "Line" else 'markers'
-            
             if y_axes[column] == "Principal":
-                fig.add_trace(go.Scatter(x=x_data, y=y_data, mode=mode, name=column))
+                fig.add_trace(go.Scatter(x=x_data, y=y_data, mode='lines', name=column))
             else:
-                fig.add_trace(go.Scatter(x=x_data, y=y_data, mode=mode, name=column, yaxis="y2"))
+                fig.add_trace(go.Scatter(x=x_data, y=y_data, mode='lines', name=column, yaxis="y2"))
         
-        # Layout do gráfico
         fig.update_layout(
             title=title_plot,
             xaxis_title="Time",
@@ -267,28 +239,31 @@ def visualize_plots():
             yaxis2=dict(title="Value", side="right", overlaying="y"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        
-        # Exibir o gráfico
         st.plotly_chart(fig)
         
         st.write(filtered_df[selected_columns].describe())
         eficiency_analysis(filtered_df)
 
+# Function to more easily gather the data Eric demmanded one time, can be expanded on or removed
 def eficiency_analysis(merged_df):
     first_transition = None
     last_transition = None
     
+    
+    # First version of cabability of finding the entry points wich begin and end the usefull results
     for i in range(1, len(merged_df)):
         actual_val = merged_df['Delta_T_InOut'].iloc[i]
         last_val = merged_df['Delta_T_InOut'].iloc[i - 1]
-    
-    # Verificando a transição de negativo para positivo
+        
+        # First time of during specified time in which we have positive energie generation
         if last_val < 0 and actual_val >= 0 and first_transition is None:
             first_transition = i
-    
-    # Verificando a transição de positivo para negativo
+
+        # Last time we have positive energie generation
         if last_val >= 0 and actual_val < 0:
            last_transition = i
+           
+        # ATTENTION: This setup can cause problems when there are no transitions points in the data set
     
     start_time = pd.to_datetime(merged_df['TIMESTAMP'].iloc[first_transition])
     end_time = pd.to_datetime(merged_df['TIMESTAMP'].iloc[last_transition])
@@ -319,16 +294,16 @@ def eficiency_analysis(merged_df):
     result_df = pd.DataFrame(table_data)
     st.write(result_df)
     
+# Function to try and find correlations between data points
 def visualize_correlation():
     st.header("Correlation")
     
     merged_df = st.session_state['merged_df']
-    columns = merged_df.columns.tolist()
     
-    # Selecionar colunas para calcular correlação
+    columns = merged_df.columns.tolist()
     selected_columns = st.multiselect("Select the columns you wish to investigate", columns)
     
-    # Verificar se foram selecionadas colunas suficientes para calcular correlação
+    # Gives out warning if there are no sufficient columns selected
     if len(selected_columns) < 2:
         st.warning("Please, select at least two columns to compare")
         return
@@ -380,4 +355,4 @@ def visualize_correlation():
     st.plotly_chart(fig2)
 
 if __name__ == "__main__":
-    main()
+    menu_selection()
